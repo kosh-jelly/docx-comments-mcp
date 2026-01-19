@@ -1,0 +1,33 @@
+[project]
+name = "docx-comments-mcp"
+version = "0.1.0"
+description = "MCP server for reading and writing Word document comments and track changes"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Josh" }]
+dependencies = [
+    "mcp>=1.0.0,<2.0.0",
+    "python-docx>=1.1.0",
+    "lxml>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+docx-comments-mcp = "docx_comments_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/docx_comments_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
