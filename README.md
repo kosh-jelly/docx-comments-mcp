@@ -2,6 +2,8 @@
 
 An MCP server for Claude Desktop that provides comprehensive read/write access to Word documents, including comments, track changes, and reply threads — features that `python-docx` doesn't fully expose.
 
+<!-- mcp-name: io.github.kosh-jelly/docx-comments -->
+
 ## Features
 
 - **Read documents**: Extract text, comments (with reply threads), and track changes
