@@ -22,6 +22,28 @@ NAMESPACES = {
 NS_MAP = {v: k for k, v in NAMESPACES.items()}
 
 
+_TYPOGRAPHY_TABLE = str.maketrans({
+    "\u2018": "'",   # left single quote
+    "\u2019": "'",   # right single quote / apostrophe
+    "\u201A": "'",   # single low-9 quote
+    "\u201C": '"',   # left double quote
+    "\u201D": '"',   # right double quote
+    "\u201E": '"',   # double low-9 quote
+    "\u2013": "-",   # en-dash
+    "\u2014": "-",   # em-dash
+    "\u2011": "-",   # non-breaking hyphen
+    "\u00A0": " ",   # non-breaking space
+})
+
+
+def normalize_typography(text: str) -> str:
+    """Replace smart/fancy Unicode characters with their plain ASCII equivalents.
+
+    All replacements are 1:1 character mappings, so string length is preserved.
+    """
+    return text.translate(_TYPOGRAPHY_TABLE)
+
+
 def qn(tag: str) -> str:
     """Convert a prefixed tag name to Clark notation.
 
@@ -73,11 +95,13 @@ def find_text_in_paragraph(paragraph: etree._Element, search_text: str) -> list[
     # Build full text
     full_text = "".join(text_elem.text[idx] for _, text_elem, idx in char_map) if char_map else ""
 
-    # Find all occurrences
+    # Find all occurrences (normalize both sides for smart-quote tolerance)
+    norm_full = normalize_typography(full_text)
+    norm_search = normalize_typography(search_text)
     matches = []
     start = 0
     while True:
-        idx = full_text.find(search_text, start)
+        idx = norm_full.find(norm_search, start)
         if idx == -1:
             break
         matches.append((idx, idx + len(search_text)))

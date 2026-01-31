@@ -17,6 +17,7 @@ from .xml_helpers import (
     get_max_id,
     get_text_content,
     iter_paragraphs,
+    normalize_typography,
     qn,
     serialize_xml,
 )
@@ -150,8 +151,10 @@ def _find_anchor_in_document(
     for para_idx, para in iter_paragraphs(document):
         para_text = get_text_content(para)
 
-        # Check if anchor text is in this paragraph
-        if anchor_text in para_text:
+        # Check if anchor text is in this paragraph (normalize for smart quotes)
+        norm_para = normalize_typography(para_text)
+        norm_anchor = normalize_typography(anchor_text)
+        if norm_anchor in norm_para:
             # Find the runs containing this text
             runs = list(para.iter(qn("w:r")))
 
@@ -165,8 +168,8 @@ def _find_anchor_in_document(
                         for _ in t_elem.text:
                             char_positions.append((run_idx, run))
 
-            # Find anchor position in paragraph
-            start_pos = para_text.find(anchor_text)
+            # Find anchor position in paragraph (using normalized text)
+            start_pos = norm_para.find(norm_anchor)
             while start_pos != -1:
                 end_pos = start_pos + len(anchor_text)
 
@@ -175,7 +178,7 @@ def _find_anchor_in_document(
                     end_run_idx = char_positions[end_pos - 1][0]
                     occurrences.append((para_idx, para, start_run_idx, end_run_idx))
 
-                start_pos = para_text.find(anchor_text, start_pos + 1)
+                start_pos = norm_para.find(norm_anchor, start_pos + 1)
 
     return occurrences
 
@@ -660,10 +663,11 @@ def add_track_change(
     # 3. Create insertion element for new text (if any)
 
     # Find the run with the text
+    norm_find = normalize_typography(find_text)
     target_run = None
     for run in para.iter(qn("w:r")):
         run_text = get_text_content(run)
-        if find_text in run_text:
+        if norm_find in normalize_typography(run_text):
             target_run = run
             break
 
@@ -673,17 +677,18 @@ def add_track_change(
     # Get the t element with the text
     target_t = None
     for t_elem in target_run.iter(qn("w:t")):
-        if t_elem.text and find_text in t_elem.text:
+        if t_elem.text and norm_find in normalize_typography(t_elem.text):
             target_t = t_elem
             break
 
     if target_t is None:
         raise DocxWriteError("Could not locate text element for modification")
 
-    # Split the text
+    # Split the text (find position via normalized text, split actual text)
     full_text = target_t.text
-    before = full_text[:full_text.find(find_text)]
-    after = full_text[full_text.find(find_text) + len(find_text):]
+    split_pos = normalize_typography(full_text).find(norm_find)
+    before = full_text[:split_pos]
+    after = full_text[split_pos + len(find_text):]
 
     # Get parent of target_run to insert new elements
     run_parent = target_run.getparent()

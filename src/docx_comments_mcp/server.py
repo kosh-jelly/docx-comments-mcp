@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .reader import read_docx
+from .reader import get_paragraph_range_docx, read_docx, search_docx
 from .writer import (
     AnchorAmbiguousError,
     AnchorNotFoundError,
@@ -63,6 +63,99 @@ def read_document(
             include_text=include_text,
             include_comments=include_comments,
             include_track_changes=include_track_changes,
+        )
+    except FileNotFoundError as e:
+        return _format_error(e)
+    except Exception as e:
+        return _format_error(e)
+
+
+@mcp.tool()
+def search_document(
+    path: str,
+    query: str,
+    case_sensitive: bool = False,
+    context_paragraphs: int = 1,
+    max_results: int = 20,
+    include_annotations: bool = False,
+) -> dict[str, Any]:
+    """Search for text in a Word document.
+
+    Use this to find specific content without loading the entire document.
+    Returns matching paragraphs with surrounding context.
+
+    Args:
+        path: Path to the .docx file
+        query: Text to search for
+        case_sensitive: Match case exactly (default: False)
+        context_paragraphs: Paragraphs to include before/after each match (default: 1)
+        max_results: Maximum matches to return (default: 20)
+        include_annotations: Include comments/track changes on matched paragraphs (default: False)
+
+    Returns:
+        Dictionary containing:
+        - query: The search query
+        - case_sensitive: Whether search was case-sensitive
+        - total_matches: Total matches found
+        - matches_returned: Number returned (may be limited)
+        - matches: List with paragraph_index, paragraph_text, paragraph_style,
+          match_start, match_end, context_before, context_after, and optionally
+          comments and track_changes
+    """
+    if not query:
+        return {
+            "success": False,
+            "error": "Query cannot be empty",
+            "error_type": "ValueError",
+        }
+    try:
+        return search_docx(
+            path=path,
+            query=query,
+            case_sensitive=case_sensitive,
+            context_paragraphs=context_paragraphs,
+            max_results=max_results,
+            include_annotations=include_annotations,
+        )
+    except FileNotFoundError as e:
+        return _format_error(e)
+    except Exception as e:
+        return _format_error(e)
+
+
+@mcp.tool()
+def get_paragraph_range(
+    path: str,
+    start_index: int,
+    end_index: int,
+    include_annotations: bool = False,
+) -> dict[str, Any]:
+    """Get a specific range of paragraphs from a Word document.
+
+    Use after search_document to get more context around matches,
+    or to read a specific section without loading the full document.
+
+    Args:
+        path: Path to the .docx file
+        start_index: First paragraph index (0-based, inclusive)
+        end_index: Last paragraph index (0-based, inclusive)
+        include_annotations: Include comments/track changes in range (default: False)
+
+    Returns:
+        Dictionary containing:
+        - start_index: Actual start (may be clamped)
+        - end_index: Actual end (may be clamped)
+        - total_paragraphs: Total paragraphs in document
+        - paragraphs: List with index, text, style
+        - comments: Comments in range (if include_annotations=True)
+        - track_changes: Track changes in range (if include_annotations=True)
+    """
+    try:
+        return get_paragraph_range_docx(
+            path=path,
+            start_index=start_index,
+            end_index=end_index,
+            include_annotations=include_annotations,
         )
     except FileNotFoundError as e:
         return _format_error(e)

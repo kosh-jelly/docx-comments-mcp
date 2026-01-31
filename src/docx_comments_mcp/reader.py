@@ -15,6 +15,7 @@ from .xml_helpers import (
     get_paragraph_style,
     get_text_content,
     iter_paragraphs,
+    normalize_typography,
     parse_datetime,
     qn,
 )
@@ -75,6 +76,65 @@ class DocumentMetadata:
     created: str | None = None
     modified: str | None = None
     word_count: int = 0
+
+
+@dataclass
+class SearchMatch:
+    """A search match with surrounding context."""
+
+    paragraph_index: int
+    paragraph_text: str
+    paragraph_style: str | None
+    match_start: int  # Character offset within paragraph
+    match_end: int  # Character offset within paragraph
+    context_before: list[Paragraph]
+    context_after: list[Paragraph]
+    comments: list[Comment] | None = None
+    track_changes: list[TrackChange] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        result: dict[str, Any] = {
+            "paragraph_index": self.paragraph_index,
+            "paragraph_text": self.paragraph_text,
+            "paragraph_style": self.paragraph_style,
+            "match_start": self.match_start,
+            "match_end": self.match_end,
+            "context_before": [
+                {"index": p.index, "text": p.text, "style": p.style}
+                for p in self.context_before
+            ],
+            "context_after": [
+                {"index": p.index, "text": p.text, "style": p.style}
+                for p in self.context_after
+            ],
+        }
+        if self.comments is not None:
+            result["comments"] = [
+                {
+                    "id": c.id,
+                    "author": c.author,
+                    "date": c.date,
+                    "text": c.text,
+                    "anchor_text": c.anchor_text,
+                    "anchor_paragraph": c.anchor_paragraph,
+                    "resolved": c.resolved,
+                }
+                for c in self.comments
+            ]
+        if self.track_changes is not None:
+            result["track_changes"] = [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "author": tc.author,
+                    "date": tc.date,
+                    "text": tc.text,
+                    "paragraph": tc.paragraph,
+                }
+                for tc in self.track_changes
+            ]
+        return result
 
 
 @dataclass
@@ -203,6 +263,136 @@ class DocxReader:
             comments=comments,
             track_changes=track_changes,
         )
+
+    def search(
+        self,
+        query: str,
+        case_sensitive: bool = False,
+        context_paragraphs: int = 1,
+        max_results: int = 20,
+        include_annotations: bool = False,
+    ) -> tuple[list[SearchMatch], int]:
+        """Search for text in document paragraphs.
+
+        Args:
+            query: Text to search for
+            case_sensitive: Match case exactly (default: False)
+            context_paragraphs: Paragraphs to include before/after each match (default: 1)
+            max_results: Maximum matches to return (default: 20)
+            include_annotations: Include comments/track changes on matched paragraphs (default: False)
+
+        Returns:
+            Tuple of (matches list, total_matches count)
+        """
+        if not query:
+            return [], 0
+
+        paragraphs = self._read_paragraphs()
+
+        # Load annotations if needed
+        comments = self._read_comments() if include_annotations else None
+        track_changes = self._read_track_changes() if include_annotations else None
+
+        matches = []
+        search_text = normalize_typography(query if case_sensitive else query.lower())
+
+        for para in paragraphs:
+            para_text = normalize_typography(para.text if case_sensitive else para.text.lower())
+            pos = para_text.find(search_text)
+
+            if pos != -1:
+                # Build context
+                start_idx = max(0, para.index - context_paragraphs)
+                end_idx = min(len(paragraphs) - 1, para.index + context_paragraphs)
+
+                context_before = [p for p in paragraphs[start_idx:para.index]]
+                context_after = [p for p in paragraphs[para.index + 1:end_idx + 1]]
+
+                # Filter annotations to this paragraph if requested
+                para_comments = None
+                para_changes = None
+                if include_annotations:
+                    para_comments = [c for c in (comments or []) if c.anchor_paragraph == para.index]
+                    para_changes = [tc for tc in (track_changes or []) if tc.paragraph == para.index]
+
+                matches.append(SearchMatch(
+                    paragraph_index=para.index,
+                    paragraph_text=para.text,
+                    paragraph_style=para.style,
+                    match_start=pos,
+                    match_end=pos + len(query),
+                    context_before=context_before,
+                    context_after=context_after,
+                    comments=para_comments,
+                    track_changes=para_changes,
+                ))
+
+        total = len(matches)
+        return matches[:max_results], total
+
+    def get_paragraph_range(
+        self,
+        start_index: int,
+        end_index: int,
+        include_annotations: bool = False,
+    ) -> dict[str, Any]:
+        """Get a range of paragraphs.
+
+        Args:
+            start_index: First paragraph index (0-based, inclusive)
+            end_index: Last paragraph index (0-based, inclusive)
+            include_annotations: Include comments/track changes in range (default: False)
+
+        Returns:
+            Dictionary containing paragraphs and optionally annotations
+        """
+        paragraphs = self._read_paragraphs()
+
+        # Clamp to valid range
+        start = max(0, start_index)
+        end = min(len(paragraphs) - 1, end_index) if paragraphs else -1
+
+        result_paragraphs = paragraphs[start:end + 1] if end >= start else []
+
+        result: dict[str, Any] = {
+            "start_index": start,
+            "end_index": end if end >= 0 else 0,
+            "total_paragraphs": len(paragraphs),
+            "paragraphs": [
+                {"index": p.index, "text": p.text, "style": p.style}
+                for p in result_paragraphs
+            ],
+        }
+
+        if include_annotations:
+            indices = set(range(start, end + 1)) if end >= start else set()
+            comments = self._read_comments()
+            track_changes = self._read_track_changes()
+            result["comments"] = [
+                {
+                    "id": c.id,
+                    "author": c.author,
+                    "date": c.date,
+                    "text": c.text,
+                    "anchor_text": c.anchor_text,
+                    "anchor_paragraph": c.anchor_paragraph,
+                    "resolved": c.resolved,
+                }
+                for c in comments if c.anchor_paragraph in indices
+            ]
+            result["track_changes"] = [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "author": tc.author,
+                    "date": tc.date,
+                    "text": tc.text,
+                    "paragraph": tc.paragraph,
+                }
+                for tc in track_changes if tc.paragraph in indices
+            ]
+
+        return result
 
     def _read_metadata(self) -> DocumentMetadata:
         """Read document metadata from core properties."""
@@ -486,3 +676,66 @@ def read_docx(
             include_track_changes=include_track_changes,
         )
         return content.to_dict()
+
+
+def search_docx(
+    path: str,
+    query: str,
+    case_sensitive: bool = False,
+    context_paragraphs: int = 1,
+    max_results: int = 20,
+    include_annotations: bool = False,
+) -> dict[str, Any]:
+    """Search for text in a Word document.
+
+    Args:
+        path: Path to the .docx file
+        query: Text to search for
+        case_sensitive: Match case exactly (default: False)
+        context_paragraphs: Paragraphs to include before/after each match (default: 1)
+        max_results: Maximum matches to return (default: 20)
+        include_annotations: Include comments/track changes on matched paragraphs (default: False)
+
+    Returns:
+        Dictionary containing query, total_matches, matches_returned, and matches list
+    """
+    with DocxReader(path) as reader:
+        matches, total = reader.search(
+            query=query,
+            case_sensitive=case_sensitive,
+            context_paragraphs=context_paragraphs,
+            max_results=max_results,
+            include_annotations=include_annotations,
+        )
+        return {
+            "query": query,
+            "case_sensitive": case_sensitive,
+            "total_matches": total,
+            "matches_returned": len(matches),
+            "matches": [m.to_dict() for m in matches],
+        }
+
+
+def get_paragraph_range_docx(
+    path: str,
+    start_index: int,
+    end_index: int,
+    include_annotations: bool = False,
+) -> dict[str, Any]:
+    """Get a range of paragraphs from a Word document.
+
+    Args:
+        path: Path to the .docx file
+        start_index: First paragraph index (0-based, inclusive)
+        end_index: Last paragraph index (0-based, inclusive)
+        include_annotations: Include comments/track changes in range (default: False)
+
+    Returns:
+        Dictionary containing paragraphs and optionally annotations
+    """
+    with DocxReader(path) as reader:
+        return reader.get_paragraph_range(
+            start_index=start_index,
+            end_index=end_index,
+            include_annotations=include_annotations,
+        )
