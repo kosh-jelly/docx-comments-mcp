@@ -417,9 +417,12 @@ class DocxReader:
         return metadata
 
     def _read_paragraphs(self) -> list[Paragraph]:
-        """Read all paragraphs from the document."""
+        """Read all paragraphs from the document (cached after first call)."""
         if self._document is None:
             return []
+
+        if hasattr(self, "_paragraphs_cache"):
+            return self._paragraphs_cache
 
         paragraphs = []
         for idx, para_elem in iter_paragraphs(self._document):
@@ -427,6 +430,7 @@ class DocxReader:
             style = get_paragraph_style(para_elem)
             paragraphs.append(Paragraph(index=idx, text=text, style=style))
 
+        self._paragraphs_cache = paragraphs
         return paragraphs
 
     def _read_comments(self) -> list[Comment]:
@@ -474,15 +478,24 @@ class DocxReader:
 
         return [comments_map[cid] for cid in sorted(top_level_ids) if cid in comments_map]
 
+    def _get_para_map(self) -> dict[etree._Element, int]:
+        """Get paragraph element to index map (cached after first call)."""
+        if hasattr(self, "_para_map_cache"):
+            return self._para_map_cache
+
+        para_map: dict[etree._Element, int] = {}
+        if self._document is not None:
+            for idx, para_elem in iter_paragraphs(self._document):
+                para_map[para_elem] = idx
+        self._para_map_cache = para_map
+        return para_map
+
     def _find_comment_anchors(self, comments_map: dict[int, Comment]) -> None:
         """Find the anchor text and paragraph for each comment."""
         if self._document is None:
             return
 
-        # Build a map of paragraph indices
-        para_map: dict[etree._Element, int] = {}
-        for idx, para_elem in iter_paragraphs(self._document):
-            para_map[para_elem] = idx
+        para_map = self._get_para_map()
 
         # Find comment ranges in document
         for comment_id, comment in comments_map.items():
@@ -590,10 +603,7 @@ class DocxReader:
 
         changes = []
 
-        # Build paragraph index map
-        para_map: dict[etree._Element, int] = {}
-        for idx, para_elem in iter_paragraphs(self._document):
-            para_map[para_elem] = idx
+        para_map = self._get_para_map()
 
         # Find insertions
         for ins_elem in self._document.iter(qn("w:ins")):

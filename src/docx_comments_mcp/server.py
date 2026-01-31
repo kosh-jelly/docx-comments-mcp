@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .reader import get_paragraph_range_docx, read_docx, search_docx
+from .reader import DocxReader, get_paragraph_range_docx, read_docx, search_docx
 from .writer import (
     AnchorAmbiguousError,
     AnchorNotFoundError,
@@ -24,6 +25,30 @@ from .writer import (
 
 # Create the MCP server
 mcp = FastMCP(name="docx-comments-mcp")
+
+# Reader cache: path -> (mtime, DocxReader)
+_reader_cache: dict[str, tuple[float, DocxReader]] = {}
+
+
+def _get_reader(path: str) -> DocxReader:
+    """Get a cached DocxReader, re-opening only if file changed."""
+    mtime = os.path.getmtime(path)
+    if path in _reader_cache:
+        cached_mtime, reader = _reader_cache[path]
+        if cached_mtime == mtime:
+            return reader
+        reader.__exit__(None, None, None)
+    reader = DocxReader(path)
+    reader.__enter__()
+    _reader_cache[path] = (mtime, reader)
+    return reader
+
+
+def _invalidate_cache(path: str) -> None:
+    """Called after write operations modify the file."""
+    if path in _reader_cache:
+        _, reader = _reader_cache.pop(path)
+        reader.__exit__(None, None, None)
 
 
 def _format_error(error: Exception) -> dict[str, Any]:
@@ -58,12 +83,13 @@ def read_document(
         - track_changes: List of track changes with id, type (insertion/deletion), author, date, text, paragraph
     """
     try:
-        return read_docx(
-            path,
+        reader = _get_reader(path)
+        content = reader.read(
             include_text=include_text,
             include_comments=include_comments,
             include_track_changes=include_track_changes,
         )
+        return content.to_dict()
     except FileNotFoundError as e:
         return _format_error(e)
     except Exception as e:
@@ -109,14 +135,21 @@ def search_document(
             "error_type": "ValueError",
         }
     try:
-        return search_docx(
-            path=path,
+        reader = _get_reader(path)
+        matches, total = reader.search(
             query=query,
             case_sensitive=case_sensitive,
             context_paragraphs=context_paragraphs,
             max_results=max_results,
             include_annotations=include_annotations,
         )
+        return {
+            "query": query,
+            "case_sensitive": case_sensitive,
+            "total_matches": total,
+            "matches_returned": len(matches),
+            "matches": [m.to_dict() for m in matches],
+        }
     except FileNotFoundError as e:
         return _format_error(e)
     except Exception as e:
@@ -151,8 +184,8 @@ def get_paragraph_range(
         - track_changes: Track changes in range (if include_annotations=True)
     """
     try:
-        return get_paragraph_range_docx(
-            path=path,
+        reader = _get_reader(path)
+        return reader.get_paragraph_range(
             start_index=start_index,
             end_index=end_index,
             include_annotations=include_annotations,
@@ -193,13 +226,17 @@ def create_comment(
         - If anchor text appears multiple times: {"success": false, "error": "Anchor text appears N times; provide more context for unique match"}
     """
     try:
-        return add_comment(
+        result = add_comment(
             path=path,
             anchor_text=anchor_text,
             comment_text=comment_text,
             author=author,
             output_path=output_path,
         )
+        _invalidate_cache(path)
+        if output_path:
+            _invalidate_cache(output_path)
+        return result
     except AnchorNotFoundError as e:
         return _format_error(e)
     except AnchorAmbiguousError as e:
@@ -235,13 +272,17 @@ def create_reply(
         - output_path: Path where the file was saved
     """
     try:
-        return add_reply(
+        result = add_reply(
             path=path,
             parent_comment_id=parent_comment_id,
             reply_text=reply_text,
             author=author,
             output_path=output_path,
         )
+        _invalidate_cache(path)
+        if output_path:
+            _invalidate_cache(output_path)
+        return result
     except CommentNotFoundError as e:
         return _format_error(e)
     except DocxWriteError as e:
@@ -277,13 +318,17 @@ def create_track_change(
         - output_path: Path where the file was saved
     """
     try:
-        return add_track_change(
+        result = add_track_change(
             path=path,
             find_text=find_text,
             replace_with=replace_with,
             author=author,
             output_path=output_path,
         )
+        _invalidate_cache(path)
+        if output_path:
+            _invalidate_cache(output_path)
+        return result
     except AnchorNotFoundError as e:
         return _format_error(e)
     except AnchorAmbiguousError as e:
@@ -314,11 +359,15 @@ def mark_comment_resolved(
         - output_path: Path where the file was saved
     """
     try:
-        return resolve_comment(
+        result = resolve_comment(
             path=path,
             comment_id=comment_id,
             output_path=output_path,
         )
+        _invalidate_cache(path)
+        if output_path:
+            _invalidate_cache(output_path)
+        return result
     except CommentNotFoundError as e:
         return _format_error(e)
     except DocxWriteError as e:
@@ -351,11 +400,15 @@ def accept_change(
         - output_path: Path where the file was saved
     """
     try:
-        return accept_track_change(
+        result = accept_track_change(
             path=path,
             change_id=change_id,
             output_path=output_path,
         )
+        _invalidate_cache(path)
+        if output_path:
+            _invalidate_cache(output_path)
+        return result
     except TrackChangeNotFoundError as e:
         return _format_error(e)
     except DocxWriteError as e:
@@ -388,11 +441,15 @@ def reject_change(
         - output_path: Path where the file was saved
     """
     try:
-        return reject_track_change(
+        result = reject_track_change(
             path=path,
             change_id=change_id,
             output_path=output_path,
         )
+        _invalidate_cache(path)
+        if output_path:
+            _invalidate_cache(output_path)
+        return result
     except TrackChangeNotFoundError as e:
         return _format_error(e)
     except DocxWriteError as e:
